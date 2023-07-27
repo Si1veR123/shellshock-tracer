@@ -6,6 +6,12 @@ pub struct RGBA {
     pub a: u8
 }
 
+impl RGBA {
+    pub fn as_colorref(self) -> u32 {
+        (self.b as u32) << 16 | (self.g as u32) << 8 | self.r as u32
+    }
+}
+
 impl Into<u32> for RGBA {
     fn into(self) -> u32 {
         let fraction = self.a as f32 / 255.0;
@@ -17,41 +23,36 @@ impl Into<u32> for RGBA {
     }
 }
 
-pub struct Bitmap<'a> {
-    pixels: &'a mut [u32]
+pub struct Bitmap {
+    start: *mut u32,
+    length: usize,
+    pub width: u32
 }
 
-impl<'a> Bitmap<'a> {
-    pub fn new(buffer: &'a mut [u32]) -> Self {
-        Self { pixels: buffer }
+impl Bitmap {
+    pub fn new(buffer: *mut u32, length: usize, width: u32) -> Self {
+        Self { start: buffer, length, width }
     }
 
-    pub fn fill(&mut self, value: RGBA) {
-        self.pixels.fill(value.into())
-    }
-
-    pub fn fill_with<F: FnMut(usize) -> RGBA>(&mut self, mut f: F) {
-        for (i, pixel) in self.pixels.iter_mut().enumerate() {
-            *pixel = f(i).into()
+    pub unsafe fn fill(&mut self, value: RGBA) {
+        let integer: u32 = value.into();
+        let mut current_ptr = self.start;
+        for _i in 0..self.length {
+            *current_ptr = integer;
+            current_ptr = current_ptr.add(1);
         }
     }
 
-    pub fn draw_line(&mut self, from: (u32, u32), to: (u32, u32), thickness: u32, color: RGBA) {
-
+    /// The function takes a single usize, the index of the pixel in the inner slice.
+    pub unsafe fn fill_with<F: FnMut(usize) -> RGBA>(&mut self, mut f: F) {
+        let mut current_ptr = self.start;
+        for i in 0..self.length {
+            *current_ptr = f(i).into();
+            current_ptr = current_ptr.add(1);
+        }
     }
 }
 
-impl<'a> Into<&'a mut [u32]> for &'a mut Bitmap<'a> {
-    fn into(self) -> &'a mut [u32] {
-        self.pixels
-    }
-}
-
-impl<'a> Into<&'a [u32]> for &'a Bitmap<'a> {
-    fn into(self) -> &'a [u32] {
-        self.pixels
-    }
-}
 
 #[cfg(test)]
 mod tests {
