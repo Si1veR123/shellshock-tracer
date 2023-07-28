@@ -14,6 +14,7 @@ impl RGBA {
 
 impl Into<u32> for RGBA {
     fn into(self) -> u32 {
+        // pre mult alpha
         let fraction = self.a as f32 / 255.0;
         let premult_r = (self.r as f32 * fraction) as u32;
         let premult_b = (self.b as f32 * fraction) as u32;
@@ -39,7 +40,7 @@ impl Bitmap {
         let mut current_ptr = self.start;
         for _i in 0..self.length {
             *current_ptr = integer;
-            current_ptr = current_ptr.add(1);
+            current_ptr = current_ptr.wrapping_add(1);
         }
     }
 
@@ -48,8 +49,26 @@ impl Bitmap {
         let mut current_ptr = self.start;
         for i in 0..self.length {
             *current_ptr = f(i).into();
-            current_ptr = current_ptr.add(1);
+            current_ptr = current_ptr.wrapping_add(1);
         }
+    }
+
+    /// # Safety
+    /// The returned slice must not be used after the pointer used to create the bitmap is invalidated.
+    /// This will be from the windows bitmap object being deleted.
+    /// 
+    /// While this slice exists, the windows bitmap object cannot be mutated as the bitmap will change.
+    pub unsafe fn as_slice(&self) -> &[u32] {
+        std::slice::from_raw_parts(self.start, self.length)
+    }
+
+    /// # Safety
+    /// The returned slice must not be used after the pointer used to create the bitmap is invalidated.
+    /// This will be from the windows bitmap object being deleted.
+    /// 
+    /// While this mutable slice exists, the windows bitmap object cannot be mutated.
+    pub unsafe fn as_slice_mut(&mut self) -> &mut [u32] {
+        std::slice::from_raw_parts_mut(self.start, self.length)
     }
 }
 
