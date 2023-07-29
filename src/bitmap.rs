@@ -1,21 +1,22 @@
 use std::mem::MaybeUninit;
 
+// will never be used as windows is little endian
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 #[cfg(target_endian = "big")]
 pub struct ARGB {
     pub a: u8,
     pub r: u8,
-    pub b: u8,
-    pub g: u8
+    pub g: u8,
+    pub b: u8
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 #[cfg(target_endian = "little")]
 pub struct ARGB {
-    pub g: u8,
     pub b: u8,
+    pub g: u8,
     pub r: u8,
     pub a: u8
 }
@@ -51,33 +52,29 @@ impl Into<ARGB> for u32 {
     }
 }
 
-pub struct Bitmap<'a> {
-    pub inner: &'a mut [ARGB],
+pub struct Bitmap<'a, T> {
+    pub inner: &'a mut [T],
     pub width: u32
 }
 
-impl<'a> Bitmap<'a> {
-    pub fn new(buffer: &'a mut [ARGB], width: u32) -> Self {
+impl<'a, T> Bitmap<'a, T> {
+    pub fn new(buffer: &'a mut [T], width: u32) -> Self {
         Self { inner: buffer, width }
     }
 
-    pub fn fill(&mut self, value: ARGB) {
-        self.inner.fill(value.as_premult_alpha())
-    }
-
     /// The function takes a single usize, the index of the pixel in the inner slice.
-    pub fn fill_with<F: FnMut(usize) -> ARGB>(&mut self, mut f: F) {
+    pub fn fill_with<F: FnMut(usize) -> T>(&mut self, mut f: F) {
         for (i, pixel) in self.inner.iter_mut().enumerate() {
-            *pixel = f(i).as_premult_alpha();
+            *pixel = f(i);
         }
     }
 
     /// Return a subsquare with a constant number of rows
-    pub fn subsrect_const<const ROWS: usize>(&self, x: u32, y: u32, columns: u32) -> [&[ARGB]; ROWS] {
+    pub fn subsrect_const<const ROWS: usize>(&self, x: u32, y: u32, columns: u32) -> [&[T]; ROWS] {
         let columns = columns as usize;
 
         // safe for the reasons given in the MaybeUninit array initialisation example 
-        let mut subsquare: [MaybeUninit<&[ARGB]>; ROWS] = unsafe { MaybeUninit::uninit().assume_init() };
+        let mut subsquare: [MaybeUninit<&[T]>; ROWS] = unsafe { MaybeUninit::uninit().assume_init() };
 
         for i in 0..ROWS {
             let row = i as u32 + y;
@@ -89,10 +86,16 @@ impl<'a> Bitmap<'a> {
         }
 
         // copied from array_assume_init in nightly
-        unsafe { (&subsquare as *const _ as *const [&[ARGB]; ROWS]).read() }
+        unsafe { (&subsquare as *const _ as *const [&[T]; ROWS]).read() }
+    }
+}
+
+impl<'a, T: Clone> Bitmap<'a, T> {
+    pub fn fill(&mut self, value: T) {
+        self.inner.fill(value)
     }
 
-    pub fn subrect(&self, buffer: &mut Vec<ARGB>, x: u32, y: u32, columns: u32, rows: u32) {
+    pub fn subrect(&self, buffer: &mut Vec<T>, x: u32, y: u32, columns: u32, rows: u32) {
         let columns = columns as usize;
 
         buffer.clear();

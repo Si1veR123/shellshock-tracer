@@ -12,7 +12,7 @@ fn main() -> Result<(), &'static str> {
     let dimensions = window_dimensions(own_hwnd).expect("Failed to get window dimensions.");
 
     // A large buffer that has enough size to store the pixels of the screen.
-    let screen_buffer: Bitmap<'static> = {
+    let screen_buffer: Bitmap<'static, ARGB> = {
         let length = (dimensions.0*dimensions.1) as usize;
         let mut inner: Vec<ARGB> = Vec::with_capacity(length);
         inner.fill(0.into());
@@ -38,11 +38,11 @@ fn main() -> Result<(), &'static str> {
     // Main windows message pump
     WindowsMessageLoop!(own_hwnd, {
         draw_bitmap(own_hwnd, bitmap, dimensions.0, dimensions.1).expect("Error drawing bitmap");
-
         let screen_cap = screen_capture(shellshock_hwnd).expect("Error capturing screen");
         let _ = bitmap_to_clipboard(screen_cap);
         let _ = bitmap_bits_to_buffer(shellshock_hwnd, screen_cap, dimensions.0, dimensions.1, screen_buffer.inner.as_mut_ptr());
-        find_tank(&screen_buffer, dimensions);
+        let location = find_tank(&screen_buffer, dimensions).unwrap();
+        println!("{:?}", location);
         DeleteObject(screen_cap as *mut c_void);
     });
 
