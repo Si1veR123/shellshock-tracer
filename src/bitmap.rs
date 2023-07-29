@@ -2,11 +2,22 @@ use std::mem::MaybeUninit;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
+#[cfg(target_endian = "big")]
 pub struct ARGB {
     pub a: u8,
     pub r: u8,
     pub b: u8,
     pub g: u8
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+#[cfg(target_endian = "little")]
+pub struct ARGB {
+    pub g: u8,
+    pub b: u8,
+    pub r: u8,
+    pub a: u8
 }
 
 impl ARGB {
