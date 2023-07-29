@@ -19,7 +19,7 @@ use winapi::um::winuser::{
     GetDC, ULW_ALPHA, ReleaseDC, PrintWindow, GetClientRect, PW_RENDERFULLCONTENT, OpenClipboard, SetClipboardData, EmptyClipboard, CloseClipboard, CF_BITMAP, FillRect
 };
 
-use crate::bitmap::RGBA;
+use crate::bitmap::ARGB;
 
 // ###############################
 // ############ Misc #############
@@ -100,7 +100,7 @@ pub unsafe fn bitmap_to_clipboard(bitmap: HBITMAP) -> Result<(), u32> {
     Ok(())
 }
 
-pub unsafe fn bitmap_bits_to_buffer(hwnd: HWND, bitmap: HBITMAP, width: u32, height: u32, buffer: *mut u32) -> Result<(), u32> {
+pub unsafe fn bitmap_bits_to_buffer(hwnd: HWND, bitmap: HBITMAP, width: u32, height: u32, buffer: *mut ARGB) -> Result<(), u32> {
     let hdc = GetDC(hwnd);
     GetDIBits(hdc, bitmap, 0, height, buffer as *mut c_void, &mut create_bitmap_info(create_bitmap_header(width, height)), DIB_RGB_COLORS);
     ReleaseDC(hwnd, hdc);
@@ -233,7 +233,7 @@ unsafe fn draw_cleanup(hwnd: HWND, hdc: HDC, mem_hdc: HDC, old: *mut c_void) -> 
     return_result
 }
 
-pub unsafe fn create_pen(width: u32, color: RGBA) -> HPEN {
+pub unsafe fn create_pen(width: u32, color: ARGB) -> HPEN {
     CreatePen(PS_SOLID as i32, width as i32, color.as_colorref())
 }
 
@@ -262,7 +262,7 @@ pub fn create_bitmap_info(header: BITMAPINFOHEADER) -> BITMAPINFO {
     }
 }  
 
-pub unsafe fn create_dibitmap(hwnd: HWND, dimensions: (u32, u32), color: RGBA) -> Result<HBITMAP, u32> {
+pub unsafe fn create_dibitmap(hwnd: HWND, dimensions: (u32, u32), color: ARGB) -> Result<HBITMAP, u32> {
     // everything is cleaned up after
     let hdc = GetDC(hwnd);
     let bitmap = CreateCompatibleBitmap(hdc, dimensions.0 as i32, dimensions.1 as i32);
