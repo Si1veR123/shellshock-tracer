@@ -2,7 +2,7 @@ use std::mem::MaybeUninit;
 
 // will never be used as windows is little endian
 #[repr(C)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg(target_endian = "big")]
 pub struct ARGB {
     pub a: u8,
@@ -12,7 +12,7 @@ pub struct ARGB {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg(target_endian = "little")]
 pub struct ARGB {
     pub b: u8,
@@ -97,8 +97,8 @@ impl<'a, T: Clone> Bitmap<'a, T> {
 
     pub fn subrect(&self, buffer: &mut Vec<T>, x: u32, y: u32, columns: u32, rows: u32) {
         let columns = columns as usize;
-
         buffer.clear();
+
         for i in 0..rows {
             let row = i as u32 + y;
             let index_of_row = self.width*row;
@@ -112,8 +112,37 @@ impl<'a, T: Clone> Bitmap<'a, T> {
 
 #[cfg(test)]
 mod tests {
-    use super::ARGB;
+    use super::*;
     use std::mem;
+
+    #[test]
+    fn subrect_test() {
+        let mut test_image = [ARGB {a: 255, r: 50, b: 50, g: 50}; 100];
+        for i in 0..50 {
+            test_image[i] = ARGB {a: 255, r: 100, b: 100, g: 100};
+        }
+        for i in [5usize, 15, 25, 35, 45, 55, 65, 75, 85, 95] {
+            test_image[i] = ARGB {a: 255, r: 200, b: 200, g: 200};
+        }
+
+        let bitmap = Bitmap::new(test_image.as_mut_slice(), 10);
+
+        let mut buffer = Vec::with_capacity(25);
+        bitmap.subrect(&mut buffer, 3, 3, 5, 5);
+
+        let expected = [
+            ARGB { b: 100, g: 100, r: 100, a: 255 }, ARGB { b: 100, g: 100, r: 100, a: 255 }, ARGB { b: 200, g: 200, r: 200, a: 255 },
+            ARGB { b: 100, g: 100, r: 100, a: 255 }, ARGB { b: 100, g: 100, r: 100, a: 255 }, ARGB { b: 100, g: 100, r: 100, a: 255 },
+            ARGB { b: 100, g: 100, r: 100, a: 255 }, ARGB { b: 200, g: 200, r: 200, a: 255 }, ARGB { b: 100, g: 100, r: 100, a: 255 },
+            ARGB { b: 100, g: 100, r: 100, a: 255 }, ARGB { b: 50, g: 50, r: 50, a: 255 }, ARGB { b: 50, g: 50, r: 50, a: 255 },
+            ARGB { b: 200, g: 200, r: 200, a: 255 }, ARGB { b: 50, g: 50, r: 50, a: 255 }, ARGB { b: 50, g: 50, r: 50, a: 255 },
+            ARGB { b: 50, g: 50, r: 50, a: 255 }, ARGB { b: 50, g: 50, r: 50, a: 255 }, ARGB { b: 200, g: 200, r: 200, a: 255 },
+            ARGB { b: 50, g: 50, r: 50, a: 255 }, ARGB { b: 50, g: 50, r: 50, a: 255 }, ARGB { b: 50, g: 50, r: 50, a: 255 },
+            ARGB { b: 50, g: 50, r: 50, a: 255 }, ARGB { b: 200, g: 200, r: 200, a: 255 }, ARGB { b: 50, g: 50, r: 50, a: 255 },
+            ARGB { b: 50, g: 50, r: 50, a: 255 }];
+
+        assert_eq!(expected.as_slice(), buffer.as_slice());
+    }
 
     #[test]
     fn pre_mult_test() {
