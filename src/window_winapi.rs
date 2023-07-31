@@ -6,17 +6,17 @@ use std::mem::size_of;
 
 use winapi::ctypes::c_void;
 use winapi::shared::minwindef::{LPARAM, LRESULT, UINT, WPARAM};
-use winapi::shared::windef::{HWND, HBITMAP, RECT, POINT, SIZE, HDC, HPEN};
+use winapi::shared::windef::{HWND, HBITMAP, RECT, POINT, SIZE, HDC, HPEN, HBRUSH};
 use winapi::um::errhandlingapi::GetLastError;
 use winapi::um::libloaderapi::GetModuleHandleW;
 use winapi::um::wingdi::{
     CreateSolidBrush, CreateCompatibleDC, BITMAPINFOHEADER, BI_RGB, BITMAPINFO, RGBQUAD, SelectObject, BLENDFUNCTION,
-    AC_SRC_OVER, AC_SRC_ALPHA, DeleteObject, DeleteDC, GdiFlush, MoveToEx, LineTo, HGDI_ERROR, CreatePen, PS_SOLID, CreateCompatibleBitmap, GetDIBits, DIB_RGB_COLORS
+    AC_SRC_OVER, AC_SRC_ALPHA, DeleteObject, DeleteDC, GdiFlush, MoveToEx, LineTo, HGDI_ERROR, CreatePen, PS_SOLID, CreateCompatibleBitmap, GetDIBits, DIB_RGB_COLORS, GetStockObject, BLACK_BRUSH
 };
 use winapi::um::winuser::{
     CreateWindowExW, DefWindowProcW, LoadCursorW, RegisterClassExW, ShowWindow, WNDCLASSEXW, CS_HREDRAW, CS_VREDRAW, WM_DESTROY, IDC_ARROW, SW_SHOW,
     CW_USEDEFAULT, WS_EX_LAYERED, WS_EX_TRANSPARENT, WS_EX_TOPMOST, WS_MAXIMIZE, EnumWindows, GetWindowTextW, PostQuitMessage, UpdateLayeredWindow,
-    GetDC, ULW_ALPHA, ReleaseDC, PrintWindow, GetClientRect, PW_RENDERFULLCONTENT, OpenClipboard, SetClipboardData, EmptyClipboard, CloseClipboard, CF_BITMAP, FillRect
+    GetDC, ULW_ALPHA, ReleaseDC, PrintWindow, PW_RENDERFULLCONTENT, OpenClipboard, SetClipboardData, EmptyClipboard, CloseClipboard, CF_BITMAP, FillRect, GetWindowRect
 };
 
 use crate::bitmap::ARGB;
@@ -28,14 +28,16 @@ use crate::bitmap::ARGB;
 /// Run a basic message loop for a given window handle
 #[macro_export]
 macro_rules! WindowsMessageLoop {
-    ($handle: ident $(,$inner: tt)?) => {
+    ($handle: ident, $loop_time: ident $(,$inner: tt)?) => {
+        use std::thread;
+        use std::ptr::null_mut;
         use winapi::um::winuser::{
-            MSG, GetMessageW, TranslateMessage, DispatchMessageW
+            MSG, TranslateMessage, DispatchMessageW, PeekMessageW, PM_REMOVE, WM_QUIT
         };
         use winapi::shared::windef::POINT;
 
         let mut msg = MSG {
-            hwnd: $handle,
+            hwnd: null_mut(),
             message: 0,
             wParam: 0,
             lParam: 0,
@@ -44,10 +46,16 @@ macro_rules! WindowsMessageLoop {
         };
 
         unsafe {
-            while GetMessageW(&mut msg, $handle, 0, 0) > 0 {
+            'outer: loop {
+                while PeekMessageW(&mut msg, null_mut(), 0, 0, PM_REMOVE) != 0 {
+                    TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                    if msg.message == WM_QUIT {
+                        break 'outer;
+                    }
+                }
                 $($inner)?
-                TranslateMessage(&msg);
-                DispatchMessageW(&msg);
+                thread::sleep($loop_time);
             }
         }
     };
@@ -69,7 +77,7 @@ pub fn window_dimensions(hwnd: HWND) -> Result<(u32, u32), u32> {
         bottom: 0,
     };
 
-    let result = unsafe { GetClientRect(hwnd, &mut rect) };
+    let result = unsafe { GetWindowRect(hwnd, &mut rect) };
 
     if result == 0 {
         return Err(unsafe { GetLastError() })
@@ -78,7 +86,8 @@ pub fn window_dimensions(hwnd: HWND) -> Result<(u32, u32), u32> {
     let width = (rect.right - rect.left).unsigned_abs();
     let height = (rect.top - rect.bottom).unsigned_abs();
 
-    Ok((width, height))
+    // win 10 has a 8 pixel border on every side
+    Ok((width - 16, height - 16))
 }
 
 pub unsafe fn bitmap_to_clipboard(bitmap: HBITMAP) -> Result<(), u32> {
@@ -140,7 +149,7 @@ pub fn create_window() -> HWND {
         hInstance: h_instance,
         hIcon: null_mut(),
         hCursor: unsafe { LoadCursorW(h_instance, IDC_ARROW) },
-        hbrBackground: unsafe { CreateSolidBrush(0) },
+        hbrBackground: unsafe { GetStockObject(BLACK_BRUSH as i32) as HBRUSH },
         lpszMenuName: null_mut(),
         lpszClassName: app_name.as_ptr(),
         hIconSm: null_mut(),
@@ -179,7 +188,6 @@ pub fn create_window() -> HWND {
 // #### Shellshock handle finding ####
 // ###################################
 unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> i32 {
-    // each char in string is 8 bits, but windows uses 16 bit chars, therefore double the capacity
     let mut buffer = Vec::with_capacity(100);
     let written = GetWindowTextW(hwnd, buffer.as_mut_ptr(), 100);
     buffer.set_len(written as usize);
@@ -288,6 +296,20 @@ pub unsafe fn create_dibitmap(hwnd: HWND, dimensions: (u32, u32), color: ARGB) -
     }
 }
 
+pub unsafe fn clear_bitmap(hwnd: HWND, dibitmap: HBITMAP, width: u32, height: u32) -> Result<(), u32> {
+    let hdc = GetDC(hwnd);
+    let mem_hdc = CreateCompatibleDC(hdc);
+    let old = SelectObject(mem_hdc, dibitmap as *mut c_void);
+
+    let solid = CreateSolidBrush(0);
+    FillRect(mem_hdc, &RECT {left: 0, top: 0, right: width as i32, bottom: height as i32}, solid);
+    DeleteObject(solid as *mut c_void);
+
+    draw_cleanup(hwnd, hdc, mem_hdc, old)?;
+
+    Ok(())
+}
+
 #[derive(Debug)]
 pub enum DrawError {
     UpdatingLayeredWindow(u32),
@@ -327,21 +349,30 @@ pub unsafe fn draw_bitmap(hwnd: HWND, dibitmap: HBITMAP, width: u32, height: u32
     Ok(())
 }
 
+/// Coordinates relative to bottom-left
 /// Returned error is a windows error code. If there is an error in drawing and in cleanup, the error code is the cleanup error code.
-pub unsafe fn draw_line(hwnd: HWND, dibitmap: HBITMAP, pen: HPEN, from: (i32, i32), to: (i32, i32)) -> Result<(), u32> {
+pub unsafe fn draw_line(hwnd: HWND, dibitmap: HBITMAP, dimensions: (u32, u32), pen: HPEN, from: (i32, i32), to: (i32, i32)) -> Result<(), u32> {
+    // account for 8 pixel window border
+    let from = (from.0+8, from.1-8);
+    let to = (to.0+8, to.1-8);
+
+    // coordinates are relative to bottom-left, so use height to flip it
+    let height = dimensions.1 as i32;
+
     let hdc = GetDC(hwnd);
     let mem_hdc = CreateCompatibleDC(hdc);
 
     let old_bmap = SelectObject(mem_hdc, dibitmap as *mut c_void);
     let old_pen = SelectObject(mem_hdc, pen as *mut c_void);
 
-    let result = MoveToEx(mem_hdc, from.0, from.1, null_mut());
+    let result = MoveToEx(mem_hdc, from.0, height-from.1, null_mut());
     if result == 0 {
+        let _result = SelectObject(mem_hdc, old_pen);
         draw_cleanup(hwnd, hdc, mem_hdc, old_bmap)?;
         return Err(GetLastError())
     }
 
-    let result = LineTo(mem_hdc, to.0, to.1);
+    let result = LineTo(mem_hdc, to.0, height-to.1);
     if result == 0 {
         // don't need to handle any error as cleanup must run, and an error will be returned anyway
         let _result = SelectObject(mem_hdc, old_pen);
@@ -361,7 +392,7 @@ pub unsafe fn draw_line(hwnd: HWND, dibitmap: HBITMAP, pen: HPEN, from: (i32, i3
 }
 
 /// Uses a curve function that takes an x value and returns a y value.
-pub unsafe fn draw_dotted_curve<F: FnMut(i32) -> i32>(hwnd: HWND, dibitmap: HBITMAP, pen: HPEN, start_x: i32, end_x: i32, dot_length: u32, mut curve: F) -> Result<(), u32> {
+pub unsafe fn draw_dotted_curve<F: FnMut(i32) -> i32>(hwnd: HWND, dibitmap: HBITMAP, dimensions: (u32, u32), pen: HPEN, start_x: i32, end_x: i32, dot_length: u32, mut curve: F) -> Result<(), u32> {
     let mut solid_part = true;
     let mut temp_start = (start_x, curve(start_x));
 
@@ -372,7 +403,7 @@ pub unsafe fn draw_dotted_curve<F: FnMut(i32) -> i32>(hwnd: HWND, dibitmap: HBIT
 
         if current_line_length >= dot_length as i32 {
             if solid_part {
-                draw_line(hwnd, dibitmap, pen, temp_start, (x, y))?;
+                draw_line(hwnd, dibitmap, dimensions, pen, temp_start, (x, y))?;
             }
             solid_part = !solid_part;
             temp_start = (x, y);
@@ -384,16 +415,18 @@ pub unsafe fn draw_dotted_curve<F: FnMut(i32) -> i32>(hwnd: HWND, dibitmap: HBIT
 
 /// Uses a curve function that takes a parameter t, the distance along the line, and returns a (x, y) coordinate.
 /// The curve is stopped when x < 0 or x > max_x, or y > max_y.
-pub unsafe fn draw_dotted_parametric_curve<F: FnMut(i32) -> (i32, i32)>(hwnd: HWND, dibitmap: HBITMAP, pen: HPEN, max_x: i32, max_y: i32, dot_length: u32, mut curve: F) -> Result<(), u32> {
+pub unsafe fn draw_dotted_parametric_curve<F: FnMut(i32) -> (i32, i32)>(hwnd: HWND, dibitmap: HBITMAP, dimensions: (u32, u32), pen: HPEN, dot_length: u32, mut curve: F) -> Result<(), u32> {
     let mut solid_part = true;
     let mut t = 0;
     let mut temp_start = curve(t);
+
+    let (max_x, max_y) = (dimensions.0 as i32, dimensions.1 as i32);
 
     loop {
         t += 1;
         let current = curve(t);
 
-        if current.0 > max_x || current.0 <= 0 || current.1 > max_y {
+        if current.0 > max_x || current.0 <= 0 || current.1 <= 0 {
             break
         }
 
@@ -402,7 +435,7 @@ pub unsafe fn draw_dotted_parametric_curve<F: FnMut(i32) -> (i32, i32)>(hwnd: HW
 
         if current_line_length >= dot_length as i32 {
             if solid_part {
-                draw_line(hwnd, dibitmap, pen, temp_start, current)?;
+                draw_line(hwnd, dibitmap, dimensions, pen, temp_start, current)?;
             }
             solid_part = !solid_part;
             temp_start = current;

@@ -37,7 +37,7 @@ impl Tank {
             let x = x_t * t + x_t2 * t.powi(2);
             let y = y_t * t + y_t2 * t.powi(2);
 
-            ((x as u32 + params.screen_position.0) as i32, height as i32 - (y as i32 + params.screen_position.1 as i32))
+            ((x as u32 + params.screen_position.0) as i32, y as i32 + params.screen_position.1 as i32)
         })
     }
 }
