@@ -19,6 +19,7 @@ use winapi::um::winuser::{
     GetDC, ULW_ALPHA, ReleaseDC, PrintWindow, PW_RENDERFULLCONTENT, OpenClipboard, SetClipboardData, EmptyClipboard, CloseClipboard, CF_BITMAP, FillRect, GetWindowRect
 };
 
+use crate::{Coordinate, Size};
 use crate::bitmap::ARGB;
 
 // ###############################
@@ -69,7 +70,7 @@ fn to_wstring(s: &str) -> Vec<u16> {
         .collect()
 }
 
-pub fn window_dimensions(hwnd: HWND) -> Result<(u32, u32), u32> {
+pub fn window_dimensions(hwnd: HWND) -> Result<Size<u32>, u32> {
     let mut rect = RECT {
         left: 0,
         top: 0,
@@ -87,7 +88,7 @@ pub fn window_dimensions(hwnd: HWND) -> Result<(u32, u32), u32> {
     let height = (rect.top - rect.bottom).unsigned_abs();
 
     // win 10 has a 8 pixel border on every side
-    Ok((width - 16, height - 16))
+    Ok(Size(width - 16, height - 16))
 }
 
 pub unsafe fn bitmap_to_clipboard(bitmap: HBITMAP) -> Result<(), u32> {
@@ -109,9 +110,9 @@ pub unsafe fn bitmap_to_clipboard(bitmap: HBITMAP) -> Result<(), u32> {
     Ok(())
 }
 
-pub unsafe fn bitmap_bits_to_buffer(hwnd: HWND, bitmap: HBITMAP, width: u32, height: u32, buffer: *mut ARGB) -> Result<(), u32> {
+pub unsafe fn bitmap_bits_to_buffer(hwnd: HWND, bitmap: HBITMAP, size: Size<u32>, buffer: *mut ARGB) -> Result<(), u32> {
     let hdc = GetDC(hwnd);
-    GetDIBits(hdc, bitmap, 0, height, buffer as *mut c_void, &mut create_bitmap_info(create_bitmap_header(width, height)), DIB_RGB_COLORS);
+    GetDIBits(hdc, bitmap, 0, size.1, buffer as *mut c_void, &mut create_bitmap_info(create_bitmap_header(size)), DIB_RGB_COLORS);
     ReleaseDC(hwnd, hdc);
     Ok(())
 }
@@ -245,15 +246,15 @@ pub unsafe fn create_pen(width: u32, color: ARGB) -> HPEN {
     CreatePen(PS_SOLID as i32, width as i32, color.as_colorref())
 }
 
-pub fn create_bitmap_header(width: u32, height: u32) -> BITMAPINFOHEADER {
+pub fn create_bitmap_header(dimensions: Size<u32>) -> BITMAPINFOHEADER {
     BITMAPINFOHEADER {
         biSize: size_of::<BITMAPINFOHEADER>() as u32,
-        biWidth: width as i32,
-        biHeight: height as i32,
+        biWidth: dimensions.0 as i32,
+        biHeight: dimensions.1 as i32,
         biPlanes: 1,
         biBitCount: 32,
         biCompression: BI_RGB,
-        biSizeImage: width*height*4,
+        biSizeImage: dimensions.0*dimensions.1*4,
         biXPelsPerMeter: 0,
         biYPelsPerMeter: 0,
         biClrUsed: 0,
@@ -270,7 +271,7 @@ pub fn create_bitmap_info(header: BITMAPINFOHEADER) -> BITMAPINFO {
     }
 }  
 
-pub unsafe fn create_dibitmap(hwnd: HWND, dimensions: (u32, u32), color: ARGB) -> Result<HBITMAP, u32> {
+pub unsafe fn create_dibitmap(hwnd: HWND, dimensions: Size<u32>, color: ARGB) -> Result<HBITMAP, u32> {
     // everything is cleaned up after
     let hdc = GetDC(hwnd);
     let bitmap = CreateCompatibleBitmap(hdc, dimensions.0 as i32, dimensions.1 as i32);
@@ -296,13 +297,13 @@ pub unsafe fn create_dibitmap(hwnd: HWND, dimensions: (u32, u32), color: ARGB) -
     }
 }
 
-pub unsafe fn clear_bitmap(hwnd: HWND, dibitmap: HBITMAP, width: u32, height: u32) -> Result<(), u32> {
+pub unsafe fn clear_bitmap(hwnd: HWND, dibitmap: HBITMAP, dimensions: Size<u32>) -> Result<(), u32> {
     let hdc = GetDC(hwnd);
     let mem_hdc = CreateCompatibleDC(hdc);
     let old = SelectObject(mem_hdc, dibitmap as *mut c_void);
 
     let solid = CreateSolidBrush(0);
-    FillRect(mem_hdc, &RECT {left: 0, top: 0, right: width as i32, bottom: height as i32}, solid);
+    FillRect(mem_hdc, &RECT {left: 0, top: 0, right: dimensions.0 as i32, bottom: dimensions.1 as i32}, solid);
     DeleteObject(solid as *mut c_void);
 
     draw_cleanup(hwnd, hdc, mem_hdc, old)?;
@@ -316,7 +317,7 @@ pub enum DrawError {
     Cleanup(u32)
 }
 
-pub unsafe fn draw_bitmap(hwnd: HWND, dibitmap: HBITMAP, width: u32, height: u32) -> Result<(), DrawError> {
+pub unsafe fn draw_bitmap(hwnd: HWND, dibitmap: HBITMAP, dimensions: Size<u32>) -> Result<(), DrawError> {
     let hdc = GetDC(hwnd);
     let mem_hdc = CreateCompatibleDC(hdc);
     let old = SelectObject(mem_hdc, dibitmap as *mut c_void);
@@ -332,7 +333,7 @@ pub unsafe fn draw_bitmap(hwnd: HWND, dibitmap: HBITMAP, width: u32, height: u32
         hwnd,
         null_mut(),
         null_mut(),
-        &mut SIZE {cx: width as i32, cy: height as i32},
+        &mut SIZE {cx: dimensions.0 as i32, cy: dimensions.1 as i32},
         mem_hdc,
         &mut POINT {x: 0, y: 0},
         0,
@@ -351,7 +352,7 @@ pub unsafe fn draw_bitmap(hwnd: HWND, dibitmap: HBITMAP, width: u32, height: u32
 
 /// Coordinates relative to bottom-left
 /// Returned error is a windows error code. If there is an error in drawing and in cleanup, the error code is the cleanup error code.
-pub unsafe fn draw_line(hwnd: HWND, dibitmap: HBITMAP, dimensions: (u32, u32), pen: HPEN, from: (i32, i32), to: (i32, i32)) -> Result<(), u32> {
+pub unsafe fn draw_line(hwnd: HWND, dibitmap: HBITMAP, dimensions: Size<u32>, pen: HPEN, from: Coordinate<i32>, to: Coordinate<i32>) -> Result<(), u32> {
     // account for 8 pixel window border
     let from = (from.0+8, from.1-8);
     let to = (to.0+8, to.1-8);
@@ -392,9 +393,9 @@ pub unsafe fn draw_line(hwnd: HWND, dibitmap: HBITMAP, dimensions: (u32, u32), p
 }
 
 /// Uses a curve function that takes an x value and returns a y value.
-pub unsafe fn draw_dotted_curve<F: FnMut(i32) -> i32>(hwnd: HWND, dibitmap: HBITMAP, dimensions: (u32, u32), pen: HPEN, start_x: i32, end_x: i32, dot_length: u32, mut curve: F) -> Result<(), u32> {
+pub unsafe fn draw_dotted_curve<F: FnMut(i32) -> i32>(hwnd: HWND, dibitmap: HBITMAP, dimensions: Size<u32>, pen: HPEN, start_x: i32, end_x: i32, dot_length: u32, mut curve: F) -> Result<(), u32> {
     let mut solid_part = true;
-    let mut temp_start = (start_x, curve(start_x));
+    let mut temp_start = Coordinate(start_x, curve(start_x));
 
     for x in (start_x+1)..=end_x {
         let y = curve(x);
@@ -403,10 +404,10 @@ pub unsafe fn draw_dotted_curve<F: FnMut(i32) -> i32>(hwnd: HWND, dibitmap: HBIT
 
         if current_line_length >= dot_length as i32 {
             if solid_part {
-                draw_line(hwnd, dibitmap, dimensions, pen, temp_start, (x, y))?;
+                draw_line(hwnd, dibitmap, dimensions, pen, temp_start, Coordinate(x, y))?;
             }
             solid_part = !solid_part;
-            temp_start = (x, y);
+            temp_start = Coordinate(x, y);
         }
     }
 
@@ -415,12 +416,12 @@ pub unsafe fn draw_dotted_curve<F: FnMut(i32) -> i32>(hwnd: HWND, dibitmap: HBIT
 
 /// Uses a curve function that takes a parameter t, the distance along the line, and returns a (x, y) coordinate.
 /// The curve is stopped when x < 0 or x > max_x, or y > max_y.
-pub unsafe fn draw_dotted_parametric_curve<F: FnMut(i32) -> (i32, i32)>(hwnd: HWND, dibitmap: HBITMAP, dimensions: (u32, u32), pen: HPEN, dot_length: u32, mut curve: F) -> Result<(), u32> {
+pub unsafe fn draw_dotted_parametric_curve<F: FnMut(i32) -> Coordinate<i32>>(hwnd: HWND, dibitmap: HBITMAP, dimensions: Size<u32>, pen: HPEN, dot_length: u32, mut curve: F) -> Result<(), u32> {
     let mut solid_part = true;
     let mut t = 0;
     let mut temp_start = curve(t);
 
-    let (max_x, max_y) = (dimensions.0 as i32, dimensions.1 as i32);
+    let (max_x, _max_y) = (dimensions.0 as i32, dimensions.1 as i32);
 
     loop {
         t += 1;

@@ -9,4 +9,5 @@ edition = "2021"
 name = "shellshock_tracer"
 
 [dependencies]
+thiserror = "1.0.44"
 winapi = { version = "0.3.9", features = ["winuser", "wingdi", "libloaderapi", "errhandlingapi"] }

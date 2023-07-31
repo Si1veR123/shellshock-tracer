@@ -1,4 +1,4 @@
-use std::mem::MaybeUninit;
+use crate::{Coordinate, Size};
 
 // will never be used as windows is little endian
 #[repr(C)]
@@ -22,10 +22,12 @@ pub struct ARGB {
 }
 
 impl ARGB {
+    /// Return a u32 in the Windows API COLORREF format
     pub fn as_colorref(self) -> u32 {
         (self.b as u32) << 16 | (self.g as u32) << 8 | self.r as u32
     }
 
+    /// Return an ARGB colour with the colour channels multiplied by the alpha channel
     pub fn as_premult_alpha(self) -> Self {
         let fraction = self.a as f32 / 255.0;
         let premult_r = (self.r as f32 * fraction) as u8;
@@ -38,7 +40,7 @@ impl ARGB {
 
 impl Into<u32> for ARGB {
     fn into(self) -> u32 {
-        // repr(C) ensures the bit layout of RGBA is
+        // repr(C) ensures the bit layout of ARGB in big endian is
         // aaaaaaaarrrrrrrrbbbbbbbbgggggggg (32)
         // which can be transmuted to a u32
         unsafe { std::mem::transmute(self) }
@@ -47,19 +49,54 @@ impl Into<u32> for ARGB {
 
 impl Into<ARGB> for u32 {
     fn into(self) -> ARGB {
-        // same as Into<u32> for RGBA
+        // SAFETY: same as Into<u32> for RGBA
         unsafe { std::mem::transmute(self) }
+    }
+}
+
+pub struct BitmapSubrectRows<'a, T> {
+    inner: &'a [T],
+    width: usize,
+    start_coord: Coordinate<usize>,
+    size: Size<usize>,              
+    current_row: usize
+}
+
+impl<'a, T> BitmapSubrectRows<'a, T> {
+    fn new(bitmap: &'a Bitmap<T>, start_coord: Coordinate<usize>, size: Size<usize>) -> Self {
+        Self { inner: bitmap.inner, width: bitmap.width as usize, start_coord, size, current_row: 0 }
+    }
+}
+
+impl<'a, T> Iterator for BitmapSubrectRows<'a, T> {
+    type Item = &'a [T];
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.current_row > self.size.0 {
+            return None
+        }
+
+        let row = self.current_row + self.start_coord.1;
+        let index_of_row = self.width*row;
+        let start_index = (index_of_row+self.start_coord.0) as usize;
+        self.current_row += 1;
+
+        Some(&self.inner[start_index..start_index+self.size.1])
     }
 }
 
 pub struct Bitmap<'a, T> {
     pub inner: &'a mut [T],
-    pub width: u32
+    pub width: usize
 }
 
 impl<'a, T> Bitmap<'a, T> {
-    pub fn new(buffer: &'a mut [T], width: u32) -> Self {
+    pub fn new(buffer: &'a mut [T], width: usize) -> Self {
         Self { inner: buffer, width }
+    }
+
+    pub fn height(&self) -> usize {
+        self.inner.len() / self.width
     }
 
     /// The function takes a single usize, the index of the pixel in the inner slice.
@@ -69,43 +106,14 @@ impl<'a, T> Bitmap<'a, T> {
         }
     }
 
-    /// Return a subsquare with a constant number of rows
-    pub fn subsrect_const<const ROWS: usize>(&self, x: u32, y: u32, columns: u32) -> [&[T]; ROWS] {
-        let columns = columns as usize;
-
-        // safe for the reasons given in the MaybeUninit array initialisation example 
-        let mut subsquare: [MaybeUninit<&[T]>; ROWS] = unsafe { MaybeUninit::uninit().assume_init() };
-
-        for i in 0..ROWS {
-            let row = i as u32 + y;
-            let index_of_row = self.width*row;
-            let start_index = (index_of_row+x) as usize;
-
-            let element = unsafe { subsquare.get_unchecked_mut(i) };
-            element.write(&self.inner[start_index..start_index+columns]);
-        }
-
-        // copied from array_assume_init in nightly
-        unsafe { (&subsquare as *const _ as *const [&[T]; ROWS]).read() }
+    pub fn subrect(&'a self, start_coord: Coordinate<usize>, size: Size<usize>) -> BitmapSubrectRows<'a, T> {
+        BitmapSubrectRows::new(self, start_coord, size)
     }
 }
 
 impl<'a, T: Clone> Bitmap<'a, T> {
     pub fn fill(&mut self, value: T) {
         self.inner.fill(value)
-    }
-
-    pub fn subrect(&self, buffer: &mut Vec<T>, x: u32, y: u32, columns: u32, rows: u32) {
-        let columns = columns as usize;
-        buffer.clear();
-
-        for i in 0..rows {
-            let row = i as u32 + y;
-            let index_of_row = self.width*row;
-            let start_index = (index_of_row+x) as usize;
-
-            buffer.extend_from_slice(&self.inner[start_index..start_index+columns])
-        }
     }
 }
 
@@ -127,8 +135,7 @@ mod tests {
 
         let bitmap = Bitmap::new(test_image.as_mut_slice(), 10);
 
-        let mut buffer = Vec::with_capacity(25);
-        bitmap.subrect(&mut buffer, 3, 3, 5, 5);
+        let pixels: Vec<ARGB> = bitmap.subrect(Coordinate(3, 3), Size(5, 5)).flatten().cloned().collect();
 
         let expected = [
             ARGB { b: 100, g: 100, r: 100, a: 255 }, ARGB { b: 100, g: 100, r: 100, a: 255 }, ARGB { b: 200, g: 200, r: 200, a: 255 },
@@ -141,7 +148,7 @@ mod tests {
             ARGB { b: 50, g: 50, r: 50, a: 255 }, ARGB { b: 200, g: 200, r: 200, a: 255 }, ARGB { b: 50, g: 50, r: 50, a: 255 },
             ARGB { b: 50, g: 50, r: 50, a: 255 }];
 
-        assert_eq!(expected.as_slice(), buffer.as_slice());
+        assert_eq!(expected.as_slice(), pixels.as_slice());
     }
 
     #[test]

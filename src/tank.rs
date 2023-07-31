@@ -1,3 +1,4 @@
+use crate::{Size, Coordinate};
 
 // Constants are on a 2560x1440, 16:9 monitor
 // They are scaled depending on the monitor's dimensions.
@@ -7,16 +8,16 @@ const GRAVITY_CONSTANT: f32 = 3.04;
 
 #[derive(Clone)]
 pub struct Tank {
-    pub screen_position: (u32, u32),
+    pub screen_position: Coordinate<u32>,
     pub angle: i8,
     pub power: u8,
     pub wind: i8
 }
 
 impl Tank {
-    pub fn construct_curve_function(&self, width: u32, height: u32) -> Box<dyn Fn(i32) -> (i32, i32)> {
-        let x_scale_ratio = width as f32 / 2560.0;
-        let y_scale_ratio = height as f32 / 1440.0;
+    pub fn construct_curve_function(&self, dimensions: Size<u32>) -> Box<dyn Fn(i32) -> Coordinate<i32>> {
+        let x_scale_ratio = dimensions.0 as f32 / 2560.0;
+        let y_scale_ratio = dimensions.1 as f32 / 1440.0;
 
         let x_power_constant = POWER_CONSTANT * x_scale_ratio;
         let y_power_constant = POWER_CONSTANT * y_scale_ratio;
@@ -37,7 +38,7 @@ impl Tank {
             let x = x_t * t + x_t2 * t.powi(2);
             let y = y_t * t + y_t2 * t.powi(2);
 
-            ((x as u32 + params.screen_position.0) as i32, y as i32 + params.screen_position.1 as i32)
+            Coordinate((x as u32 + params.screen_position.0) as i32, y as i32 + params.screen_position.1 as i32)
         })
     }
 }
