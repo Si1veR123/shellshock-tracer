@@ -70,7 +70,7 @@ fn to_wstring(s: &str) -> Vec<u16> {
         .collect()
 }
 
-pub fn window_dimensions(hwnd: HWND) -> Result<Size<u32>, u32> {
+pub unsafe fn window_dimensions(hwnd: HWND) -> Result<Size<u32>, u32> {
     let mut rect = RECT {
         left: 0,
         top: 0,
@@ -133,7 +133,7 @@ pub unsafe extern "system" fn window_proc(
         }
         _ => return DefWindowProcW(hwnd, msg, wparam, lparam),
     }
-    return 0;
+    0
 }
 
 pub fn create_window() -> HWND {
@@ -345,7 +345,7 @@ pub unsafe fn draw_bitmap(hwnd: HWND, dibitmap: HBITMAP, dimensions: Size<u32>) 
         return Err(DrawError::UpdatingLayeredWindow(GetLastError()))
     }
 
-   draw_cleanup(hwnd, hdc, mem_hdc, old).map_err(|code| DrawError::Cleanup(code))?;
+   draw_cleanup(hwnd, hdc, mem_hdc, old).map_err(DrawError::Cleanup)?;
 
     Ok(())
 }
@@ -392,8 +392,11 @@ pub unsafe fn draw_line(hwnd: HWND, dibitmap: HBITMAP, dimensions: Size<u32>, pe
     Ok(())
 }
 
+/// The length of dotted lines drawn.
+const DOT_LENGTH: i32 = 4;
+
 /// Uses a curve function that takes an x value and returns a y value.
-pub unsafe fn draw_dotted_curve<F: FnMut(i32) -> i32>(hwnd: HWND, dibitmap: HBITMAP, dimensions: Size<u32>, pen: HPEN, start_x: i32, end_x: i32, dot_length: u32, mut curve: F) -> Result<(), u32> {
+pub unsafe fn draw_dotted_curve<F: FnMut(i32) -> i32>(hwnd: HWND, dibitmap: HBITMAP, dimensions: Size<u32>, pen: HPEN, start_x: i32, end_x: i32, mut curve: F) -> Result<(), u32> {
     let mut solid_part = true;
     let mut temp_start = Coordinate(start_x, curve(start_x));
 
@@ -402,7 +405,7 @@ pub unsafe fn draw_dotted_curve<F: FnMut(i32) -> i32>(hwnd: HWND, dibitmap: HBIT
         let square_sum = (x-temp_start.0).pow(2) + (y-temp_start.1).pow(2);
         let current_line_length = (square_sum as f32).sqrt() as i32;
 
-        if current_line_length >= dot_length as i32 {
+        if current_line_length >= DOT_LENGTH {
             if solid_part {
                 draw_line(hwnd, dibitmap, dimensions, pen, temp_start, Coordinate(x, y))?;
             }
@@ -416,7 +419,7 @@ pub unsafe fn draw_dotted_curve<F: FnMut(i32) -> i32>(hwnd: HWND, dibitmap: HBIT
 
 /// Uses a curve function that takes a parameter t, the distance along the line, and returns a (x, y) coordinate.
 /// The curve is stopped when x < 0 or x > max_x, or y > max_y.
-pub unsafe fn draw_dotted_parametric_curve<F: FnMut(i32) -> Coordinate<i32>>(hwnd: HWND, dibitmap: HBITMAP, dimensions: Size<u32>, pen: HPEN, dot_length: u32, mut curve: F) -> Result<(), u32> {
+pub unsafe fn draw_dotted_parametric_curve<F: FnMut(i32) -> Coordinate<i32>>(hwnd: HWND, dibitmap: HBITMAP, dimensions: Size<u32>, pen: HPEN, mut curve: F) -> Result<(), u32> {
     let mut solid_part = true;
     let mut t = 0;
     let mut temp_start = curve(t);
@@ -434,7 +437,7 @@ pub unsafe fn draw_dotted_parametric_curve<F: FnMut(i32) -> Coordinate<i32>>(hwn
         let square_sum = (current.0-temp_start.0).pow(2) + (current.1-temp_start.1).pow(2);
         let current_line_length = (square_sum as f32).sqrt() as i32;
 
-        if current_line_length >= dot_length as i32 {
+        if current_line_length >= DOT_LENGTH {
             if solid_part {
                 draw_line(hwnd, dibitmap, dimensions, pen, temp_start, current)?;
             }

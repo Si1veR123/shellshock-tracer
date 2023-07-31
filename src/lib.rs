@@ -1,3 +1,6 @@
+// There are too many unsafe windows APIs to document everything.
+#![allow(clippy::missing_safety_doc)]
+
 #[derive(Copy, Clone)]
 /// x, y coordinate
 pub struct Coordinate<T>(pub T, pub T);

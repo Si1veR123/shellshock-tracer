@@ -38,19 +38,21 @@ impl ARGB {
     }
 }
 
-impl Into<u32> for ARGB {
-    fn into(self) -> u32 {
+impl From<u32> for ARGB {
+    fn from(value: u32) -> Self {
         // repr(C) ensures the bit layout of ARGB in big endian is
         // aaaaaaaarrrrrrrrbbbbbbbbgggggggg (32)
         // which can be transmuted to a u32
-        unsafe { std::mem::transmute(self) }
+        unsafe { std::mem::transmute(value) }
     }
 }
 
-impl Into<ARGB> for u32 {
-    fn into(self) -> ARGB {
-        // SAFETY: same as Into<u32> for RGBA
-        unsafe { std::mem::transmute(self) }
+impl From<ARGB> for u32 {
+    fn from(value: ARGB) -> u32 {
+        // repr(C) ensures the bit layout of ARGB in big endian is
+        // aaaaaaaarrrrrrrrbbbbbbbbgggggggg (32)
+        // which can be transmuted to a u32
+        unsafe { std::mem::transmute(value) }
     }
 }
 
@@ -64,7 +66,7 @@ pub struct BitmapSubrectRows<'a, T> {
 
 impl<'a, T> BitmapSubrectRows<'a, T> {
     fn new(bitmap: &'a Bitmap<T>, start_coord: Coordinate<usize>, size: Size<usize>) -> Self {
-        Self { inner: bitmap.inner, width: bitmap.width as usize, start_coord, size, current_row: 0 }
+        Self { inner: bitmap.inner, width: bitmap.width, start_coord, size, current_row: 0 }
     }
 }
 
@@ -78,7 +80,7 @@ impl<'a, T> Iterator for BitmapSubrectRows<'a, T> {
 
         let row = self.current_row + self.start_coord.1;
         let index_of_row = self.width*row;
-        let start_index = (index_of_row+self.start_coord.0) as usize;
+        let start_index = index_of_row+self.start_coord.0;
         self.current_row += 1;
 
         Some(&self.inner[start_index..start_index+self.size.1])
