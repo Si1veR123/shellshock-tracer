@@ -117,6 +117,13 @@ impl<'a, T: Clone> Bitmap<'a, T> {
     pub fn fill(&mut self, value: T) {
         self.inner.fill(value)
     }
+
+    pub fn new_static(dimensions: Size<u32>, fill: T) -> Bitmap<'static, T> {
+        let length = (dimensions.0*dimensions.1) as usize;
+        let inner = vec![fill; length];
+        let slice = inner.leak();
+        Bitmap { inner: slice, width: dimensions.0 as usize }
+    }
 }
 
 

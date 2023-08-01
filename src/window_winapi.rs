@@ -1,5 +1,4 @@
 use std::ffi::OsStr;
-use std::fmt::Display;
 use std::iter::once;
 use std::os::windows::ffi::OsStrExt;
 use std::ptr::null_mut;
@@ -47,15 +46,10 @@ pub enum WindowsErrorType {
 }
 
 #[derive(Error, Debug)]
+#[error("Error with the Windows API (code: {}, type: {:?})", self.code, self.error_type)]
 pub struct WindowsError {
     pub code: u32,
     pub error_type: WindowsErrorType
-}
-
-impl Display for WindowsError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Error with the Windows API (code: {}, type: {:?})", self.code, self.error_type)
-    }
 }
 
 impl From<u32> for WindowsError {

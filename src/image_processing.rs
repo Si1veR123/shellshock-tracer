@@ -43,17 +43,15 @@ fn rolling_sum_bitmap(bitmap: &Bitmap<f32>, from: Coordinate<usize>, to: Coordin
 }
 
 // relative to bottom left
-pub fn find_tank(bitmap: &Bitmap<ARGB>) -> Option<Coordinate<u32>> {
+pub fn find_tank(bitmap: &Bitmap<ARGB>, score_bitmap: &mut Bitmap<f32>) -> Option<Coordinate<u32>> {
     let dimensions = Size(bitmap.width, bitmap.height());
 
     let tank_size = tank_size_for_dimensions(dimensions);
     let menu_size_pixels = (dimensions.1 as f32 * MENU_BAR) as usize;
  
-    let mut scores: Vec<f32> = Vec::with_capacity(bitmap.inner.len());
-    for pixel in bitmap.inner.iter() {
-        scores.push(pixel_score(*pixel))
+    for (i, pixel) in score_bitmap.inner.iter_mut().enumerate() {
+        *pixel = pixel_score(bitmap.inner[i])
     }
-    let score_bitmap = Bitmap::new(scores.as_mut_slice(), bitmap.width);
 
     let most_likely_rect = rolling_sum_bitmap(&score_bitmap, Coordinate(0, menu_size_pixels), Coordinate(dimensions.0, dimensions.1), tank_size, OVERLAP_PIXELS)?;
     let expanded_from = Coordinate(most_likely_rect.0.saturating_sub(tank_size.0), most_likely_rect.1.saturating_sub(tank_size.1));
