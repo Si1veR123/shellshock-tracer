@@ -1,8 +1,11 @@
 use std::ffi::OsStr;
+use std::fmt::Display;
 use std::iter::once;
 use std::os::windows::ffi::OsStrExt;
 use std::ptr::null_mut;
 use std::mem::size_of;
+
+use thiserror::Error;
 
 use winapi::ctypes::c_void;
 use winapi::shared::minwindef::{LPARAM, LRESULT, UINT, WPARAM};
@@ -25,6 +28,41 @@ use crate::bitmap::ARGB;
 // ###############################
 // ############ Misc #############
 // ###############################
+
+#[derive(Debug)]
+pub enum WindowsErrorType {
+    Other,
+    DeleteMemoryDc,
+    CreateMemoryDc,
+    GetDc,
+    ReleaseDc,
+    CreateObject,
+    DeleteObject,
+    GetModuleHandle,
+    RegisterWindowClass,
+    CreateWindow,
+    SelectObject,
+    CreateBitmap,
+    UpdateLayeredWindow
+}
+
+#[derive(Error, Debug)]
+pub struct WindowsError {
+    pub code: u32,
+    pub error_type: WindowsErrorType
+}
+
+impl Display for WindowsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Error with the Windows API (code: {}, type: {:?})", self.code, self.error_type)
+    }
+}
+
+impl From<u32> for WindowsError {
+    fn from(value: u32) -> Self {
+        Self { code: value, error_type: WindowsErrorType::Other }
+    }
+}
 
 /// Run a basic message loop for a given window handle
 #[macro_export]
@@ -70,7 +108,7 @@ fn to_wstring(s: &str) -> Vec<u16> {
         .collect()
 }
 
-pub unsafe fn window_dimensions(hwnd: HWND) -> Result<Size<u32>, u32> {
+pub unsafe fn window_dimensions(hwnd: HWND) -> Result<Size<u32>, WindowsError> {
     let mut rect = RECT {
         left: 0,
         top: 0,
@@ -81,7 +119,7 @@ pub unsafe fn window_dimensions(hwnd: HWND) -> Result<Size<u32>, u32> {
     let result = unsafe { GetWindowRect(hwnd, &mut rect) };
 
     if result == 0 {
-        return Err(unsafe { GetLastError() })
+        return Err(unsafe { GetLastError().into() })
     }
 
     let width = (rect.right - rect.left).unsigned_abs();
@@ -89,32 +127,6 @@ pub unsafe fn window_dimensions(hwnd: HWND) -> Result<Size<u32>, u32> {
 
     // win 10 has a 8 pixel border on every side
     Ok(Size(width - 16, height - 16))
-}
-
-pub unsafe fn bitmap_to_clipboard(bitmap: HBITMAP) -> Result<(), u32> {
-    if OpenClipboard(std::ptr::null_mut()) == 0 {
-        return Err(GetLastError())
-    }
-    if EmptyClipboard() == 0 {
-        CloseClipboard();
-        return Err(GetLastError())
-    }
-    if SetClipboardData(CF_BITMAP, bitmap as *mut c_void).is_null() {
-        CloseClipboard();
-        return Err(GetLastError())
-    }
-    if CloseClipboard() == 0 {
-        return Err(GetLastError())
-    }
-
-    Ok(())
-}
-
-pub unsafe fn bitmap_bits_to_buffer(hwnd: HWND, bitmap: HBITMAP, size: Size<u32>, buffer: *mut ARGB) -> Result<(), u32> {
-    let hdc = GetDC(hwnd);
-    GetDIBits(hdc, bitmap, 0, size.1, buffer as *mut c_void, &mut create_bitmap_info(create_bitmap_header(size)), DIB_RGB_COLORS);
-    ReleaseDC(hwnd, hdc);
-    Ok(())
 }
 
 // ###############################
@@ -136,10 +148,14 @@ pub unsafe extern "system" fn window_proc(
     0
 }
 
-pub fn create_window() -> HWND {
+pub fn create_window() -> Result<HWND, WindowsError> {
     let app_name = to_wstring("Shellshock Tracer");
 
     let h_instance = unsafe { GetModuleHandleW(null_mut()) };
+
+    if h_instance.is_null() {
+        return unsafe { Err(WindowsError { code: GetLastError(), error_type: WindowsErrorType::GetModuleHandle }) }
+    }
 
     let wnd_class = WNDCLASSEXW {
         cbSize: size_of::<WNDCLASSEXW>() as u32,
@@ -157,6 +173,10 @@ pub fn create_window() -> HWND {
     };
 
     let class_atom = unsafe { RegisterClassExW(&wnd_class) };
+
+    if class_atom == 0 {
+        return unsafe { Err(WindowsError { code: GetLastError(), error_type: WindowsErrorType::RegisterWindowClass }) }
+    }
 
     let hwnd = unsafe {
         CreateWindowExW(
@@ -176,18 +196,18 @@ pub fn create_window() -> HWND {
     };
 
     if hwnd.is_null() {
-        panic!("Failed to create window.");
+        return unsafe { Err(WindowsError { code: GetLastError(), error_type: WindowsErrorType::CreateWindow }) }
     }
 
     unsafe { ShowWindow(hwnd, SW_SHOW) };
 
-    hwnd
+    Ok(hwnd)
 }
-
 
 // ###################################
 // #### Shellshock handle finding ####
 // ###################################
+
 unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> i32 {
     let mut buffer = Vec::with_capacity(100);
     let written = GetWindowTextW(hwnd, buffer.as_mut_ptr(), 100);
@@ -219,24 +239,39 @@ pub fn get_shellshock_window() -> Option<HWND> {
     }
 }
 
-
 // ###################################
 // ######### Window Drawing ##########
 // ###################################
-unsafe fn draw_cleanup(hwnd: HWND, hdc: HDC, mem_hdc: HDC, old: *mut c_void) -> Result<(), u32> {
+
+unsafe fn create_mem_dc(hwnd: HWND) -> Result<(HDC, HDC), WindowsError> {
+    let hdc = GetDC(hwnd);
+    if hdc.is_null() {
+        return Err(WindowsError { code: GetLastError(), error_type: WindowsErrorType::GetDc })
+    }
+
+    let mem_hdc = CreateCompatibleDC(hdc);
+    if mem_hdc.is_null() {
+        ReleaseDC(hwnd, hdc);
+        return Err(WindowsError { code: GetLastError(), error_type: WindowsErrorType::CreateMemoryDc })
+    }
+
+    Ok((hdc, mem_hdc))
+}
+
+unsafe fn draw_cleanup(hwnd: HWND, hdc: HDC, mem_hdc: HDC, old: *mut c_void) -> Result<(), WindowsError> {
     let mut return_result = Ok(());
 
     let result =  SelectObject(mem_hdc, old);
     if result.is_null() || result == HGDI_ERROR {
-        return_result = Err(GetLastError())
+        return_result = Err(WindowsError { code: GetLastError(), error_type: WindowsErrorType::SelectObject })
     }
 
     if DeleteDC(mem_hdc) == 0 {
-        return_result = Err(GetLastError())
+        return_result = Err(WindowsError { code: GetLastError(), error_type: WindowsErrorType::DeleteMemoryDc })
     }
     
     if ReleaseDC(hwnd, hdc) == 0 {
-        return_result = Err(GetLastError())
+        return_result = Err(WindowsError { code: GetLastError(), error_type: WindowsErrorType::ReleaseDc })
     }
 
     return_result
@@ -271,56 +306,81 @@ pub fn create_bitmap_info(header: BITMAPINFOHEADER) -> BITMAPINFO {
     }
 }  
 
-pub unsafe fn create_dibitmap(hwnd: HWND, dimensions: Size<u32>, color: ARGB) -> Result<HBITMAP, u32> {
-    // everything is cleaned up after
-    let hdc = GetDC(hwnd);
+pub unsafe fn create_dibitmap(hwnd: HWND, dimensions: Size<u32>, color: ARGB) -> Result<HBITMAP, WindowsError> {
+    let (hdc, mem_hdc) = create_mem_dc(hwnd)?;
+
     let bitmap = CreateCompatibleBitmap(hdc, dimensions.0 as i32, dimensions.1 as i32);
 
-    let mem_hdc = CreateCompatibleDC(hdc);
+    if bitmap.is_null() {
+        DeleteDC(mem_hdc);
+        ReleaseDC(hwnd, hdc);
+        return Err(WindowsError { code: GetLastError(), error_type: WindowsErrorType::CreateBitmap })
+    }
+
     let old = SelectObject(mem_hdc, bitmap as *mut c_void);
+    if old.is_null() {
+        DeleteObject(bitmap as *mut c_void);
+        DeleteDC(mem_hdc);
+        ReleaseDC(hwnd, hdc);
+        return Err(WindowsError { code: GetLastError(), error_type: WindowsErrorType::SelectObject });
+    }
 
     let solid = CreateSolidBrush(color.as_colorref());
-    FillRect(mem_hdc, &RECT {left: 0, top: 0, right: dimensions.0 as i32, bottom: dimensions.1 as i32}, solid);
-    DeleteObject(solid as *mut c_void);
-
-    if GdiFlush() == 0 {
-        draw_cleanup(hwnd, hdc, mem_hdc, old)?;
-        return Err(GetLastError())
+    if solid.is_null() {
+        DeleteObject(bitmap as *mut c_void);
+        let _ = draw_cleanup(hwnd, hdc, mem_hdc, old);
+        return Err(WindowsError { code: GetLastError(), error_type: WindowsErrorType::CreateObject })
     }
+
+    let fill_result = FillRect(mem_hdc, &RECT {left: 0, top: 0, right: dimensions.0 as i32, bottom: dimensions.1 as i32}, solid);
+    let delete_result = DeleteObject(solid as *mut c_void);
+    let flush_result = GdiFlush();
 
     draw_cleanup(hwnd, hdc, mem_hdc, old)?;
 
-    if bitmap.is_null() {
-        Err(GetLastError())
-    } else {
-        Ok(bitmap)
-    }
+    if fill_result == 0 { return Err(WindowsError { code: GetLastError(), error_type: WindowsErrorType::Other }) }
+    if delete_result == 0 { return Err(WindowsError { code: GetLastError(), error_type: WindowsErrorType::DeleteObject }) }
+    if flush_result == 0 { return Err(WindowsError { code: GetLastError(), error_type: WindowsErrorType::Other }) }
+
+    Ok(bitmap)
 }
 
-pub unsafe fn clear_bitmap(hwnd: HWND, dibitmap: HBITMAP, dimensions: Size<u32>) -> Result<(), u32> {
-    let hdc = GetDC(hwnd);
-    let mem_hdc = CreateCompatibleDC(hdc);
+pub unsafe fn clear_bitmap(hwnd: HWND, dibitmap: HBITMAP, dimensions: Size<u32>) -> Result<(), WindowsError> {
+    let (hdc, mem_hdc) = create_mem_dc(hwnd)?;
+
     let old = SelectObject(mem_hdc, dibitmap as *mut c_void);
+    if old.is_null() {
+        DeleteDC(mem_hdc);
+        ReleaseDC(hwnd, hdc);
+        return Err(WindowsError { code: GetLastError(), error_type: WindowsErrorType::SelectObject });
+    }
 
     let solid = CreateSolidBrush(0);
-    FillRect(mem_hdc, &RECT {left: 0, top: 0, right: dimensions.0 as i32, bottom: dimensions.1 as i32}, solid);
-    DeleteObject(solid as *mut c_void);
+    if solid.is_null() {
+        let _ = draw_cleanup(hwnd, hdc, mem_hdc, old);
+        return Err(WindowsError { code: GetLastError(), error_type: WindowsErrorType::CreateObject })
+    }
+
+    let fill_result = FillRect(mem_hdc, &RECT {left: 0, top: 0, right: dimensions.0 as i32, bottom: dimensions.1 as i32}, solid);
+    let delete_result = DeleteObject(solid as *mut c_void);
 
     draw_cleanup(hwnd, hdc, mem_hdc, old)?;
+
+    if fill_result == 0 { return Err(WindowsError { code: GetLastError(), error_type: WindowsErrorType::Other }) }
+    if delete_result == 0 { return Err(WindowsError { code: GetLastError(), error_type: WindowsErrorType::DeleteObject }) }
 
     Ok(())
 }
 
-#[derive(Debug)]
-pub enum DrawError {
-    UpdatingLayeredWindow(u32),
-    Cleanup(u32)
-}
+pub unsafe fn draw_bitmap(hwnd: HWND, dibitmap: HBITMAP, dimensions: Size<u32>) -> Result<(), WindowsError> {
+    let (hdc, mem_hdc) = create_mem_dc(hwnd)?;
 
-pub unsafe fn draw_bitmap(hwnd: HWND, dibitmap: HBITMAP, dimensions: Size<u32>) -> Result<(), DrawError> {
-    let hdc = GetDC(hwnd);
-    let mem_hdc = CreateCompatibleDC(hdc);
     let old = SelectObject(mem_hdc, dibitmap as *mut c_void);
+    if old.is_null() {
+        DeleteDC(mem_hdc);
+        ReleaseDC(hwnd, hdc);
+        return Err(WindowsError { code: GetLastError(), error_type: WindowsErrorType::SelectObject });
+    }
 
     let mut blend = BLENDFUNCTION {
         BlendOp: AC_SRC_OVER,
@@ -340,19 +400,19 @@ pub unsafe fn draw_bitmap(hwnd: HWND, dibitmap: HBITMAP, dimensions: Size<u32>) 
         &mut blend,
         ULW_ALPHA
     );
-    if result == 0 {
-        let _ = draw_cleanup(hwnd, hdc, mem_hdc, old);
-        return Err(DrawError::UpdatingLayeredWindow(GetLastError()))
-    }
 
-   draw_cleanup(hwnd, hdc, mem_hdc, old).map_err(DrawError::Cleanup)?;
+   draw_cleanup(hwnd, hdc, mem_hdc, old)?;
+
+   if result == 0 {
+       return Err(WindowsError { code: GetLastError(), error_type: WindowsErrorType::UpdateLayeredWindow })
+    }
 
     Ok(())
 }
 
 /// Coordinates relative to bottom-left
 /// Returned error is a windows error code. If there is an error in drawing and in cleanup, the error code is the cleanup error code.
-pub unsafe fn draw_line(hwnd: HWND, dibitmap: HBITMAP, dimensions: Size<u32>, pen: HPEN, from: Coordinate<i32>, to: Coordinate<i32>) -> Result<(), u32> {
+pub unsafe fn draw_line(hwnd: HWND, dibitmap: HBITMAP, dimensions: Size<u32>, pen: HPEN, from: Coordinate<i32>, to: Coordinate<i32>) -> Result<(), WindowsError> {
     // account for 8 pixel window border
     let from = (from.0+8, from.1-8);
     let to = (to.0+8, to.1-8);
@@ -360,58 +420,33 @@ pub unsafe fn draw_line(hwnd: HWND, dibitmap: HBITMAP, dimensions: Size<u32>, pe
     // coordinates are relative to bottom-left, so use height to flip it
     let height = dimensions.1 as i32;
 
-    let hdc = GetDC(hwnd);
-    let mem_hdc = CreateCompatibleDC(hdc);
+    let (hdc, mem_hdc) = create_mem_dc(hwnd)?;
 
     let old_bmap = SelectObject(mem_hdc, dibitmap as *mut c_void);
+    if old_bmap.is_null() {
+        DeleteDC(mem_hdc);
+        ReleaseDC(hwnd, hdc);
+        return Err(WindowsError { code: GetLastError(), error_type: WindowsErrorType::SelectObject })
+    }
+
     let old_pen = SelectObject(mem_hdc, pen as *mut c_void);
-
-    let result = MoveToEx(mem_hdc, from.0, height-from.1, null_mut());
-    if result == 0 {
-        let _result = SelectObject(mem_hdc, old_pen);
-        draw_cleanup(hwnd, hdc, mem_hdc, old_bmap)?;
-        return Err(GetLastError())
+    if old_pen.is_null() {
+        let _ = draw_cleanup(hwnd, hdc, mem_hdc, old_bmap);
+        return Err(WindowsError { code: GetLastError(), error_type: WindowsErrorType::SelectObject })
     }
 
-    let result = LineTo(mem_hdc, to.0, height-to.1);
-    if result == 0 {
-        // don't need to handle any error as cleanup must run, and an error will be returned anyway
-        let _result = SelectObject(mem_hdc, old_pen);
-        draw_cleanup(hwnd, hdc, mem_hdc, old_bmap)?;
-        return Err(GetLastError())
-    }
-
-    let result = SelectObject(mem_hdc, old_pen);
-    if result.is_null() || result == HGDI_ERROR {
-        draw_cleanup(hwnd, hdc, mem_hdc, old_bmap)?;
-        return Err(GetLastError());
-    }
+    let move_result = MoveToEx(mem_hdc, from.0, height-from.1, null_mut());
+    let line_result = LineTo(mem_hdc, to.0, height-to.1);
+    let select_result = SelectObject(mem_hdc, old_pen);
 
     draw_cleanup(hwnd, hdc, mem_hdc, old_bmap)?;
 
-    Ok(())
-}
+    if move_result == 0 || line_result == 0 {
+        return Err(GetLastError().into())
+    }
 
-/// The length of dotted lines drawn.
-const DOT_LENGTH: i32 = 4;
-
-/// Uses a curve function that takes an x value and returns a y value.
-pub unsafe fn draw_dotted_curve<F: FnMut(i32) -> i32>(hwnd: HWND, dibitmap: HBITMAP, dimensions: Size<u32>, pen: HPEN, start_x: i32, end_x: i32, mut curve: F) -> Result<(), u32> {
-    let mut solid_part = true;
-    let mut temp_start = Coordinate(start_x, curve(start_x));
-
-    for x in (start_x+1)..=end_x {
-        let y = curve(x);
-        let square_sum = (x-temp_start.0).pow(2) + (y-temp_start.1).pow(2);
-        let current_line_length = (square_sum as f32).sqrt() as i32;
-
-        if current_line_length >= DOT_LENGTH {
-            if solid_part {
-                draw_line(hwnd, dibitmap, dimensions, pen, temp_start, Coordinate(x, y))?;
-            }
-            solid_part = !solid_part;
-            temp_start = Coordinate(x, y);
-        }
+    if select_result.is_null() {
+        return Err(WindowsError { code: GetLastError(), error_type: WindowsErrorType::SelectObject });
     }
 
     Ok(())
@@ -419,7 +454,10 @@ pub unsafe fn draw_dotted_curve<F: FnMut(i32) -> i32>(hwnd: HWND, dibitmap: HBIT
 
 /// Uses a curve function that takes a parameter t, the distance along the line, and returns a (x, y) coordinate.
 /// The curve is stopped when x < 0 or x > max_x, or y > max_y.
-pub unsafe fn draw_dotted_parametric_curve<F: FnMut(i32) -> Coordinate<i32>>(hwnd: HWND, dibitmap: HBITMAP, dimensions: Size<u32>, pen: HPEN, mut curve: F) -> Result<(), u32> {
+pub unsafe fn draw_dotted_parametric_curve<F: FnMut(i32) -> Coordinate<i32>>(hwnd: HWND, dibitmap: HBITMAP, dimensions: Size<u32>, pen: HPEN, mut curve: F) -> Result<(), WindowsError> {
+    /// The length of dotted lines drawn.
+    const DOT_LENGTH: i32 = 4;
+
     let mut solid_part = true;
     let mut t = 0;
     let mut temp_start = curve(t);
@@ -449,32 +487,77 @@ pub unsafe fn draw_dotted_parametric_curve<F: FnMut(i32) -> Coordinate<i32>>(hwn
     Ok(())
 }
 
+pub unsafe fn bitmap_to_clipboard(bitmap: HBITMAP) -> Result<(), WindowsError> {
+    if OpenClipboard(std::ptr::null_mut()) == 0 {
+        return Err(GetLastError().into())
+    }
+    if EmptyClipboard() == 0 {
+        CloseClipboard();
+        return Err(GetLastError().into())
+    }
+    if SetClipboardData(CF_BITMAP, bitmap as *mut c_void).is_null() {
+        CloseClipboard();
+        return Err(GetLastError().into())
+    }
+    if CloseClipboard() == 0 {
+        return Err(GetLastError().into())
+    }
+
+    Ok(())
+}
+
+pub unsafe fn bitmap_bits_to_buffer(hwnd: HWND, bitmap: HBITMAP, size: Size<u32>, buffer: *mut ARGB) -> Result<(), WindowsError> {
+    let hdc = GetDC(hwnd);
+    let result_scanlines = GetDIBits(hdc, bitmap, 0, size.1, buffer as *mut c_void, &mut create_bitmap_info(create_bitmap_header(size)), DIB_RGB_COLORS);
+
+    if ReleaseDC(hwnd, hdc) == 0 {
+        return Err(WindowsError { code: GetLastError(), error_type: WindowsErrorType::ReleaseDc })
+    }
+
+    if result_scanlines == 0 {
+        return Err(GetLastError().into())
+    }
+
+    Ok(())
+}
+
 pub unsafe fn object_cleanup(bitmap: HBITMAP, pen: HPEN) {
     DeleteObject(bitmap as *mut c_void);
     DeleteObject(pen as *mut c_void);
 }
 
-
 // ###################################
 // ######### Screen Capture ##########
 // ###################################
 
-pub unsafe fn screen_capture(hwnd: HWND) -> Result<HBITMAP, u32> {
+pub unsafe fn screen_capture(hwnd: HWND) -> Result<HBITMAP, WindowsError> {
     let dimensions = window_dimensions(hwnd)?;
     
-    let hdc = GetDC(hwnd);
-    let mem_hdc = CreateCompatibleDC(hdc);
+    let (hdc, mem_hdc) = create_mem_dc(hwnd)?;
+
     let bitmap = CreateCompatibleBitmap(hdc, dimensions.0 as i32, dimensions.1 as i32);
+    if bitmap.is_null() {
+        DeleteDC(mem_hdc);
+        ReleaseDC(hwnd, hdc);
+        return Err(WindowsError { code: GetLastError(), error_type: WindowsErrorType::CreateBitmap })
+    }
+
     let old = SelectObject(mem_hdc, bitmap as *mut c_void);
+    if old.is_null() {
+        DeleteObject(bitmap as *mut c_void);
+        DeleteDC(mem_hdc);
+        ReleaseDC(hwnd, hdc);
+        return Err(WindowsError { code: GetLastError(), error_type: WindowsErrorType::SelectObject })
+    }
     
     let result = PrintWindow(hwnd, mem_hdc, PW_RENDERFULLCONTENT);
     
-    if result == 0 {
-        draw_cleanup(hwnd, hdc, mem_hdc, old)?;
-        DeleteObject(bitmap as *mut c_void);
-        return Err(GetLastError())
-    }
-    
     draw_cleanup(hwnd, hdc, mem_hdc, old)?;
+
+    if result == 0 {
+        DeleteObject(bitmap as *mut c_void);
+        return Err(GetLastError().into())
+    }
+
     Ok(bitmap)
 }

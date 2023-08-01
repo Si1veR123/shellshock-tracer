@@ -9,8 +9,8 @@ use winapi::um::wingdi::GdiFlush;
 
 const LOOP_DURATION: Duration = Duration::from_millis(10);
 
-fn main() -> Result<(), &'static str> {
-    let own_hwnd = create_window();
+fn main() -> Result<(), String> {
+    let own_hwnd = create_window().map_err(|err| format!("Error creating window: {err}"))?;
     let shellshock_hwnd = get_shellshock_window().ok_or("Shellshock application not found.")?;
     let dimensions = unsafe { window_dimensions(own_hwnd).expect("Failed to get window dimensions.") };
 

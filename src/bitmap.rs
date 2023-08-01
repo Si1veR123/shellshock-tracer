@@ -74,7 +74,7 @@ impl<'a, T> Iterator for BitmapSubrectRows<'a, T> {
     type Item = &'a [T];
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.current_row > self.size.0 {
+        if self.current_row >= self.size.0 {
             return None
         }
 
