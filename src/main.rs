@@ -1,13 +1,8 @@
-use std::time::Duration;
-
-use shellshock_tracer::window_winapi::{create_window, get_shellshock_window, draw_bitmap, create_dibitmap, screen_capture, window_dimensions, object_cleanup, create_pen, bitmap_bits_to_buffer, draw_dotted_parametric_curve};
-use shellshock_tracer::{WindowsMessageLoop, Coordinate};
+use shellshock_tracer::window_winapi::{create_window, get_shellshock_window, create_dibitmap, window_dimensions, create_pen};
+use shellshock_tracer::Coordinate;
 use shellshock_tracer::bitmap::{ARGB, Bitmap};
 use shellshock_tracer::tank::Tank;
-use shellshock_tracer::image_processing::find_tank;
-use winapi::um::wingdi::GdiFlush;
-
-const LOOP_DURATION: Duration = Duration::from_millis(10);
+use shellshock_tracer::event_loop::{BitmapBuffers, WindowsObjects, Config, event_loop};
 
 fn main() -> Result<(), String> {
     let own_hwnd = create_window().map_err(|err| format!("Error creating window: {err}"))?;
@@ -15,35 +10,28 @@ fn main() -> Result<(), String> {
     let dimensions = unsafe { window_dimensions(own_hwnd).expect("Failed to get window dimensions.") };
 
     // Large buffers that has enough size to store the pixels of the screen.
-    let screen_buffer = Bitmap::new_static(dimensions, 0.into());
-    // Used when searching for the tank. Buffer created here to prevent allocating every search.
-    let mut score_bitmap = Bitmap::new_static(dimensions, 0.0);
+    let buffers = BitmapBuffers {
+        screen: Bitmap::new_static(dimensions, 0.into()),
+        score: Bitmap::new_static(dimensions, 0.0),
+    };
 
-    let bitmap;
-    let pen;
-    // Bitmap and pen are deleted after use
-    unsafe {
-        bitmap = create_dibitmap(own_hwnd, dimensions, ARGB {r: 0, b: 0, g: 0, a: 0}).map_err(|_| "Error creating bitmap.")?;
-        pen = create_pen(2, ARGB { r: 200, b: 100, g: 100, a: 255 });
-    }
+    let windows_objects = WindowsObjects {
+        bitmap: unsafe { create_dibitmap(own_hwnd, dimensions, 0.into()).map_err(|_| "Error creating bitmap.")? },
+        pen: unsafe { create_pen(2, ARGB { r: 200, b: 100, g: 100, a: 255 }) },
+    };
 
-    // Initial data from the shellshock window
-    let mut tank = Tank { screen_position: Coordinate(0, 0), angle: -77, power: 37, wind: 23 };
-    // own_hwnd, ss_hwnd, dimensions, 
-    // Main windows message pump
-    WindowsMessageLoop!(own_hwnd, LOOP_DURATION, {
-        //clear_bitmap(own_hwnd, bitmap, dimensions.0, dimensions.1).unwrap();
-        draw_bitmap(own_hwnd, bitmap, dimensions).expect("Error drawing bitmap");
-        let screen_cap = screen_capture(shellshock_hwnd).expect("Error capturing screen");
-        bitmap_bits_to_buffer(shellshock_hwnd, screen_cap, dimensions, screen_buffer.inner.as_mut_ptr()).unwrap();
-        let location = find_tank(&screen_buffer, &mut score_bitmap).unwrap();
-        tank.screen_position = location;
-        let closure = tank.construct_curve_function(dimensions);
-        draw_dotted_parametric_curve(own_hwnd, bitmap, dimensions, pen, closure).map_err(|_| "Error drawing curve.")?;
-        GdiFlush();
-    });
+    let tank = Tank { screen_position: Coordinate(0, 0), angle: -77, power: 37, wind: 23 };
 
-    unsafe { object_cleanup(bitmap, pen) };
+    let config = Config {
+        window_handle: own_hwnd,
+        shellshock_handle: shellshock_hwnd,
+        dimensions,
+        buffers,
+        windows_objects,
+        tank,
+    };
+
+    event_loop(config)?;
 
     Ok(())
 }
