@@ -226,7 +226,7 @@ pub fn get_shellshock_window() -> Option<HWND> {
 
     let _result = unsafe { EnumWindows(Some(enum_windows_proc), handle_ptr as isize) };
 
-    if handle_ptr.is_null() {
+    if shellshock_window_hwnd.is_null() {
         None
     } else {
         Some(shellshock_window_hwnd)
