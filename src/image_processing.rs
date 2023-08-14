@@ -3,8 +3,8 @@ use std::cmp;
 use crate::bitmap::{Bitmap, ARGB};
 use crate::{Coordinate, Size};
 
-pub const TANK_HEIGHT_FRACTION: f32 = 0.019185;
-pub const TANK_WIDTH_FRACTION: f32 = 0.0208333;
+pub const TANK_HEIGHT_FRACTION: f32 = 0.019535;
+pub const TANK_WIDTH_FRACTION: f32 = 0.01736;
 pub const MENU_BAR: f32 = 0.17037037;
 pub const OVERLAP_PIXELS: usize = 50;
 
@@ -60,6 +60,6 @@ pub fn find_tank(bitmap: &Bitmap<ARGB>, score_bitmap: &mut Bitmap<f32>) -> Optio
         cmp::min(dimensions.1, expanded_from.1 + 3*tank_size.1)
     );
     
-    let closer_rect = rolling_sum_bitmap(&score_bitmap, expanded_from, expanded_to, tank_size, 4)?;
+    let closer_rect = rolling_sum_bitmap(&score_bitmap, expanded_from, expanded_to, tank_size, 2)?;
     Some(Coordinate((closer_rect.0 + tank_size.0/2) as u32, (closer_rect.1 + tank_size.1/2) as u32))
 }

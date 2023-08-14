@@ -7,10 +7,10 @@ pub mod window_winapi;
 pub mod bitmap;
 pub mod image_processing;
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 /// x, y coordinate
 pub struct Coordinate<T>(pub T, pub T);
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 /// A size in 2D space
 pub struct Size<T>(pub T, pub T);

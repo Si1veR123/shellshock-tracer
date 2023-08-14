@@ -118,6 +118,11 @@ impl<'a, T: Clone> Bitmap<'a, T> {
         self.inner.fill(value)
     }
 
+    /// Returns a `Bitmap` with a static lifetime.
+    /// 
+    /// Dropping this bitmap will not deallocate the inner data.
+    /// 
+    /// It is backed by a slice with capacity for `dimensions.0*dimensions.1` of type `T`.
     pub fn new_static(dimensions: Size<u32>, fill: T) -> Bitmap<'static, T> {
         let length = (dimensions.0*dimensions.1) as usize;
         let inner = vec![fill; length];
