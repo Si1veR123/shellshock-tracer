@@ -272,8 +272,19 @@ unsafe fn draw_cleanup(hwnd: HWND, hdc: HDC, mem_hdc: HDC, old: *mut c_void) -> 
     return_result
 }
 
-pub unsafe fn create_pen(width: u32, color: ARGB) -> HPEN {
-    CreatePen(PS_SOLID as i32, width as i32, color.as_colorref())
+pub fn create_pen(width: u32, color: ARGB) -> Result<HPEN, WindowsError> {
+    // safe as not using any pointers as arguments
+    
+    let pen = unsafe {
+        CreatePen(PS_SOLID as i32, width as i32, color.as_colorref())
+    };
+
+    if pen.is_null() {
+        let code = unsafe { GetLastError() };
+        Err(WindowsError { code, error_type: WindowsErrorType::CreateObject })
+    } else {
+        Ok(pen)
+    }
 }
 
 pub fn create_bitmap_header(dimensions: Size<u32>) -> BITMAPINFOHEADER {
