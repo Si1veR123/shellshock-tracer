@@ -14,7 +14,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let windows_objects = WindowsObjects {
         bitmap: unsafe { create_dibitmap(own_hwnd, dimensions, 0.into())? },
-        pen: unsafe { create_pen(2, ARGB { r: 200, b: 100, g: 100, a: 255 }) },
+        pen: create_pen(2, ARGB { r: 200, b: 100, g: 100, a: 255 })?,
     };
     
     let config = Config {
