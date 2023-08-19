@@ -21,6 +21,7 @@ use winapi::um::winuser::{
     GetDC, ULW_ALPHA, ReleaseDC, PrintWindow, PW_RENDERFULLCONTENT, OpenClipboard, SetClipboardData, EmptyClipboard, CloseClipboard, CF_BITMAP, FillRect, GetWindowRect
 };
 
+use crate::tank::Tank;
 use crate::{Coordinate, Size};
 use crate::bitmap::ARGB;
 
@@ -407,9 +408,9 @@ pub unsafe fn draw_bitmap(hwnd: HWND, dibitmap: HBITMAP, dimensions: Size<u32>) 
 /// Coordinates relative to bottom-left
 /// Returned error is a windows error code. If there is an error in drawing and in cleanup, the error code is the cleanup error code.
 pub unsafe fn draw_line(hwnd: HWND, dibitmap: HBITMAP, dimensions: Size<u32>, pen: HPEN, from: Coordinate<i32>, to: Coordinate<i32>) -> Result<(), WindowsError> {
-    // account for 8 pixel window border
-    let from = (from.0+8, from.1-8);
-    let to = (to.0+8, to.1-8);
+    // add any offset
+    let from = (from.0, from.1);
+    let to = (to.0, to.1);
 
     // coordinates are relative to bottom-left, so use height to flip it
     let height = dimensions.1 as i32;
@@ -448,19 +449,19 @@ pub unsafe fn draw_line(hwnd: HWND, dibitmap: HBITMAP, dimensions: Size<u32>, pe
 
 /// Uses a curve function that takes a parameter t, the distance along the line, and returns a (x, y) coordinate.
 /// The curve is stopped when x < 0 or x > max_x, or y > max_y.
-pub unsafe fn draw_dotted_parametric_curve<F: FnMut(i32) -> Coordinate<i32>>(hwnd: HWND, dibitmap: HBITMAP, dimensions: Size<u32>, pen: HPEN, mut curve: F) -> Result<(), WindowsError> {
+pub unsafe fn draw_tank_curve(hwnd: HWND, dibitmap: HBITMAP, dimensions: Size<u32>, pen: HPEN, tank: &Tank) -> Result<(), WindowsError> {
     /// The length of dotted lines drawn.
     const DOT_LENGTH: i32 = 4;
 
     let mut solid_part = true;
     let mut t = 0;
-    let mut temp_start = curve(t);
+    let mut temp_start = tank.curve_function(t, dimensions);
 
     let (max_x, _max_y) = (dimensions.0 as i32, dimensions.1 as i32);
 
     loop {
         t += 1;
-        let current = curve(t);
+        let current = tank.curve_function(t, dimensions);
 
         if current.0 > max_x || current.0 <= 0 || current.1 <= 0 {
             break

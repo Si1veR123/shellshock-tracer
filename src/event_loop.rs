@@ -14,7 +14,7 @@ use crate::{
     bitmap::Bitmap,
     WindowsMessageLoop,
     window_winapi::{
-        draw_bitmap, screen_capture, bitmap_bits_to_buffer, draw_dotted_parametric_curve, object_cleanup, clear_bitmap
+        draw_bitmap, screen_capture, bitmap_bits_to_buffer, draw_tank_curve, object_cleanup, clear_bitmap
     },
     image_processing::find_tank,
     tank::Tank
@@ -56,6 +56,7 @@ pub fn event_loop(cfg: Config) -> Result<(), Box<dyn Error>> {
 
         'input:
         loop {
+            buffer.clear();
             print!("Enter (power angle wind direction:(left: 0, right: 1) ):");
             let _ = stdout.flush();
 
@@ -83,7 +84,6 @@ pub fn event_loop(cfg: Config) -> Result<(), Box<dyn Error>> {
             };
             
             let _ = tank_sender.send(tank);
-            buffer.clear();
         }
     });
 
@@ -101,8 +101,7 @@ pub fn event_loop(cfg: Config) -> Result<(), Box<dyn Error>> {
             .ok_or_else(|| format!("Tank not found"))?;
 
         tank.screen_position = location;
-        let parametric_path = tank.construct_curve_function(cfg.dimensions);
-        draw_dotted_parametric_curve(cfg.window_handle, cfg.windows_objects.bitmap, cfg.dimensions, cfg.windows_objects.pen, parametric_path)?;
+        draw_tank_curve(cfg.window_handle, cfg.windows_objects.bitmap, cfg.dimensions, cfg.windows_objects.pen, &tank)?;
 
         draw_bitmap(cfg.window_handle, cfg.windows_objects.bitmap, cfg.dimensions)?;
         clear_bitmap(cfg.window_handle, cfg.windows_objects.bitmap, cfg.dimensions)?;

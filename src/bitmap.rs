@@ -1,3 +1,6 @@
+use std::io;
+use std::fs::write;
+
 use crate::{Coordinate, Size};
 
 // will never be used as windows is little endian
@@ -110,6 +113,13 @@ impl<'a, T> Bitmap<'a, T> {
 
     pub fn subrect(&'a self, start_coord: Coordinate<usize>, size: Size<usize>) -> BitmapSubrectRows<'a, T> {
         BitmapSubrectRows::new(self, start_coord, size)
+    }
+}
+
+impl<'a, ARGB> Bitmap<'a, ARGB> {
+    /// ONLY FOR DEBUGGING
+    pub fn save_raw(&self, path: &str) -> io::Result<()> {
+        write::<_, &[u8]>(path, unsafe { std::slice::from_raw_parts(self.inner.as_ptr().cast(), self.inner.len()*4) })
     }
 }
 
